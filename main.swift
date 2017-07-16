@@ -14,7 +14,7 @@ extension Character
 }
 
 public struct Identifier : Expression {
-	var name: String
+	var identifier: String
 }
 
 public struct IntegerLiteral : Expression {
@@ -67,12 +67,12 @@ public enum TokenType {
     case ASTERISK
     case BANG
     case COMMA
-	case COMMENT(String)
+	case COMMENT
     case GT
     case GTE
-    case IDENT(String)
+    case IDENT
     case ILLEGAL
-    case INT(String)
+    case INT
     case LBRACE
     case LET
     case LT
@@ -99,7 +99,7 @@ public enum TokenType {
     case END
     case RETURN
     case LOCAL
-    case STRING(String)
+    case STRING
 	case TRUE
 	case FALSE
 
@@ -131,12 +131,12 @@ public enum TokenType {
 		case .ASTERISK: return "ASTERISK"
 		case .BANG: return "BANG"
 		case .COMMA: return "COMMA"
-		case let .COMMENT(x): return "COMMENT[" + x + "]"
+		case .COMMENT: return "COMMENT"
 		case .GT: return "GT"
 		case .GTE: return "GTE"
-		case let .IDENT(x): return "IDENT[" + x + "]" 
+		case .IDENT: return "IDENT"
 		case .ILLEGAL: return "ILLEGAL"
-		case let .INT(x): return "INT[" + x + "]"
+		case .INT: return "INT"
 		case .LBRACE: return "LBRACE"
 		case .LET: return "LET"
 		case .LT: return "LT"
@@ -165,8 +165,7 @@ public enum TokenType {
 		case .LOCAL: return "LOCAL"
 		case .TRUE: return "TRUE"
 		case .FALSE: return "FALSE"
-		case let .STRING(x):
-			return "STRING[" + x + "]"
+		case .STRING: return "STRING"
 		}
 	}
     
@@ -178,6 +177,56 @@ public enum TokenType {
             return false
         }
     }
+}
+
+public class Token {
+	let tokenType: TokenType
+	init(tokenType: TokenType){
+		self.tokenType = tokenType
+	}
+	func toString() -> String {
+		return self.tokenType.toString()
+	}
+}
+
+public class ValueToken : Token{
+	let value: String
+	init(tokenType: TokenType, value: String){
+		self.value = value
+		super.init(tokenType:tokenType)
+	}
+}
+
+public class CommentToken: ValueToken {
+	init(value: String){
+		super.init(tokenType:TokenType.COMMENT, value:value)
+	}
+}
+
+public class StringToken : ValueToken {
+	init(value: String){
+		super.init(tokenType:TokenType.STRING, value:value)
+	}
+}
+
+public class IntegerToken : ValueToken {
+	init(value: String){
+		super.init(tokenType:TokenType.INT, value:value)
+	}
+	override func toString() -> String {
+		return "Integer: '\(self.value)'"
+	}
+}
+
+public class IdentifierToken : Token {
+	let identifier : String 
+	init(identifier: String){
+		self.identifier = identifier
+		super.init(tokenType: TokenType.IDENT)
+	}
+	override func toString() -> String {
+		return "IDENT: '\(self.identifier)'"
+	}
 }
 
 protocol Statement {
@@ -238,30 +287,33 @@ var keywords : Dictionary<String, TokenType> = [
 
 typealias BlockStatements = Array<Statement>
 
-public class IfStatement {
+public class IfStatement : ExpressionStatement {
 	var clause : Expression
 	var consequence: BlockStatements
 	var alternative : IfStatement? = nil
-	init(clause : Expression, consequence: BlockStatements){
+	init(clause : Expression,
+		consequence: BlockStatements,
+		alternative: IfStatement?
+	){
 		self.clause = clause
 		self.consequence = consequence
+		self.alternative = alternative
 	}
 }
 
 public struct AssignStatement : Statement{
-	var ident : String
+	var ident : IdentifierToken
 	var rhs : Expression
 }
 
-public struct ExpressionStatement : Statement {
-	var expression : Expression
+public class ExpressionStatement : Statement, Expression {
 }
 
 
 public class Parser {
 	let lexer : Lexer
-	var curToken: TokenType = TokenType.ILLEGAL
-	var peekToken: TokenType = TokenType.ILLEGAL 
+	var curToken: Token = Token(tokenType:TokenType.ILLEGAL)
+	var peekToken: Token = Token(tokenType:TokenType.ILLEGAL)
 	init(lexer : Lexer){
 		self.lexer = lexer;
 		self.nextToken()
@@ -274,13 +326,15 @@ public class Parser {
 	}
 
 	func parsePrefix() throws -> Expression {
-		switch self.curToken {
+		switch self.curToken.tokenType {
+			case TokenType.IDENT:
+				let ident = (self.curToken as! IdentifierToken).identifier
+				return Identifier(identifier:ident)
 			case TokenType.TRUE:
 				return BooleanLiteral(value: true)
 			case TokenType.FALSE:
 				return BooleanLiteral(value: false)
 			case TokenType.MINUS:
-				self.nextToken()
 				return PrefixExpression(
 					Operator: "-",
 					rhs: try self.parseExpression(prec: Precedence.PREFIX)
@@ -294,19 +348,19 @@ public class Parser {
 			case TokenType.LPAREN:
 				self.nextToken()
 				let exp = try self.parseExpression(prec: Precedence.LOWEST)
-				if case TokenType.RPAREN(_) = self.peekToken{ 
+				if case TokenType.RPAREN(_) = self.peekToken.tokenType{ 
 					throw ParseError(message:"Expected ')'")
 				}
 				return exp
-			case let TokenType.IDENT(ident):
-				return Identifier(name: ident)
-			case let TokenType.INT(integer):
-				guard let x = Int(integer) else {
-					throw ParseError(message:"Cannot parse '\(integer)' as an integer")
+			case TokenType.INT:
+				let intToken = self.curToken as! IntegerToken
+				guard let x = Int(intToken.value) else {
+					throw ParseError(message:"Cannot parse '\(intToken.value)' as an integer")
 				}
 				return IntegerLiteral(value: x)
-			case let TokenType.STRING(x):
-				return StringLiteral(value: x)
+			case TokenType.STRING:
+				let strToken = self.curToken as! StringToken
+				return StringLiteral(value: strToken.value)
 			default:
 				throw ParseError(message: "No prefix expression parse function for " + self.curToken.toString())
 		}
@@ -314,7 +368,7 @@ public class Parser {
 
 	func parseInfix(left: Expression) throws -> Expression? {
 		var opcode : String
-		switch self.peekToken {
+		switch self.peekToken.tokenType {
 			case TokenType.PLUS:
 				opcode = "+"
 			case TokenType.MINUS:
@@ -335,25 +389,17 @@ public class Parser {
 				return nil
 		}	
 		self.nextToken()
-		let prec = self.curToken.opPrecedence()
+		let prec = self.curToken.tokenType.opPrecedence()
 		self.nextToken()
 		let rhs = try self.parseExpression(prec:prec)
-		self.nextToken()
 		return InfixExpression(lhs: left, Operator: opcode, rhs: rhs)
 	}
 
 	func parseExpression(prec: Precedence) throws -> Expression {
 		var left = try self.parsePrefix()
-		while true {
-			if case TokenType.SEMICOLON = self.peekToken {
-				break;
-			}
-			if case TokenType.EOF = self.peekToken {
-				break;
-			}
-			if prec.rawValue >= self.peekToken.opPrecedence().rawValue {
-				break;
-			}
+		while self.peekToken.tokenType != TokenType.SEMICOLON &&
+			self.peekToken.tokenType != TokenType.EOF &&
+			prec.rawValue < self.peekToken.tokenType.opPrecedence().rawValue {
 			let infixLeft = try self.parseInfix(left: left) 
 			if infixLeft == nil {
 				return left
@@ -365,89 +411,94 @@ public class Parser {
 	}
 
 	func consumeSemicolon(){
-		if case TokenType.SEMICOLON = self.peekToken  {
+		if self.peekToken.tokenType == TokenType.SEMICOLON {
 			self.nextToken()
 		}
 	}
 
-	func parseAssignStatement(lhs : String) throws -> AssignStatement {
+	func parseAssignStatement(lhs : IdentifierToken) throws -> AssignStatement {
 		self.nextToken() // consume the lhs
 		self.nextToken() // consume the '=' token.
+		print("assign about to consume", self.curToken.toString())
 
 		let assignStatement = AssignStatement(
 			ident: lhs, 
 			rhs: try self.parseExpression(prec:Precedence.LOWEST)
 		)
 		print("cur token is", self.curToken.toString())
-		self.consumeSemicolon()
 		return assignStatement
 	}
 
-	func parseIfStatement() throws -> ExpressionStatement {
+	func parseIfStatement() throws -> IfStatement {
 		self.nextToken() // consume IF
+		print("parsing expression")
 		let clause = try self.parseExpression(prec:Precedence.LOWEST)
-		guard case TokenType.THEN = self.curToken else {
+		self.nextToken()
+		guard self.curToken.tokenType == TokenType.THEN else {
 			throw ParseError(message:"expected 'then', got" + self.curToken.toString())
 		}
 		self.nextToken() // consume THEN
 		var consequence = BlockStatements()
-		var alternative : IfStatement? = nil
-		while true {
-			// consume the consequence
-			if case TokenType.END = self.curToken {} else {
-				consequence.append(try self.parseStatement())
-				self.nextToken()
-			}
+		while self.curToken.tokenType != TokenType.END {
+			consequence.append(try self.parseStatement())
+			self.nextToken()
 		}
-		switch self.curToken{
-			case TokenType.ELSE, TokenType.ELSEIF:
-				break
-			default:
-				return try parseIfStatement()
+		guard [TokenType.ELSE, TokenType.ELSEIF].contains(self.curToken.tokenType) else {
+			return IfStatement(
+				clause: clause,
+				consequence: consequence,
+				alternative: nil
+			)
 		}
-		while true {
-
-			// consume the consequence
-			if case TokenType.END = self.curToken {} else {
-				consequence.append(try self.parseStatement())
-				self.nextToken()
-			}
-		}
+		let alt = try parseIfStatement()
+		return IfStatement(
+			clause: clause,
+			consequence: consequence,
+			alternative: alt
+		)
 	}
 
 	func parseBlock() throws -> BlockStatements {
 		var block = BlockStatements()
-		while true { 
-			switch self.curToken {
-			case TokenType.END:
-				return block
-			case TokenType.EOF:
+		while self.curToken.tokenType != TokenType.END {
+			if self.curToken.tokenType == TokenType.EOF {
 				throw ParseError(message:"expected 'end' for block but reached EOF")
-			default:
-				block.append(try self.parseStatement())
 			}
+			block.append(try self.parseStatement())
 		}
 		return block
 	}
 
 	func parseStatement() throws -> Statement {
-		switch self.curToken {
-			case let TokenType.IDENT(ident):
-				if case TokenType.ASSIGN = self.peekToken {
-					return try self.parseAssignStatement(lhs: ident)
+		let out : Statement
+		while self.curToken.tokenType == TokenType.SEMICOLON {
+			self.nextToken()
+		}
+		switch self.curToken.tokenType {
+			case TokenType.IDENT:
+				if TokenType.ASSIGN == self.peekToken.tokenType {
+					print("parsing assign statement")
+					out = try self.parseAssignStatement(
+						lhs: self.curToken as! IdentifierToken
+					)
+					print("parsed it, next is", self.curToken.toString())
+					break
 				}
-				throw ParseError(message:":(")
+				throw ParseError(message:":( - " + self.curToken.toString() + " peek " + self.peekToken.toString())
 			case TokenType.IF:
-				return try self.parseIfStatement()
+				out = try self.parseIfStatement()
 		default:
 			throw ParseError(message: "unexpected token: " + self.curToken.toString())
 		}
+		return out
 	}
 
 	func parseProgram() throws -> BlockStatements {
 		var program = BlockStatements()
-		while !self.curToken.isEOF() {
-			program.append(try self.parseStatement())
+		while self.curToken.tokenType != TokenType.EOF {
+			let statement = try self.parseStatement()
+			print("got statement", statement)
+			program.append(statement)
 			self.nextToken()
 		}
 		return program
@@ -466,84 +517,73 @@ public class Lexer {
         self.readChar()
     }
     
-    func nextToken() -> TokenType {
-        var tok : TokenType
+    func nextToken() -> Token {
+		var tok : Token? = nil
+        var tokType : TokenType
         self.skipWhitespace()
+		defer {
+			self.readChar()
+		}
         switch self.ch {
         case "=":
             if self.peekChar() == "=" {
                 self.readChar()
-                tok = TokenType.EQ;
-            }else{
-                tok = TokenType.ASSIGN;
+				return Token(tokenType:TokenType.EQ);
             }
+			return Token(tokenType:TokenType.ASSIGN);
         case "~":
             if self.peekChar() == "=" {
                 self.readChar()
-                tok = TokenType.NOTEQ;
+				return Token(tokenType:TokenType.NOTEQ);
             }else{
-                tok = TokenType.TILDE;
+				return Token(tokenType:TokenType.TILDE);
             }
-        case "!":
-            tok = TokenType.BANG;
+		case "!": return Token(tokenType:TokenType.BANG)
+		case ";": return Token(tokenType:TokenType.SEMICOLON)
+		case "(": return Token(tokenType:TokenType.LPAREN);
+		case ")": return Token(tokenType:TokenType.RPAREN);
+		case "{": return Token(tokenType:TokenType.LBRACE);
+		case "}": return Token(tokenType:TokenType.RBRACE);
+		case ",": return Token(tokenType:TokenType.COMMA);
+		case "*": return Token(tokenType:TokenType.ASTERISK)
+		case "/": return Token(tokenType:TokenType.SLASH)
+		case "+": return Token(tokenType:TokenType.PLUS);
         case "\"":
-            tok = TokenType.STRING(self.readString(terminator: "\""))
+			return StringToken(value:self.readString(terminator: "\""))
         case "'":
-            tok = TokenType.STRING(self.readString(terminator: "'"))
-        case ";":
-            tok = TokenType.SEMICOLON;
-        case "(":
-            tok = TokenType.LPAREN;
-        case ")":
-            tok = TokenType.RPAREN;
-        case "{":
-            tok = TokenType.LBRACE;
-        case "}":
-            tok = TokenType.RBRACE;
-        case ",":
-            tok = TokenType.COMMA;
+			return IntegerToken(value:self.readString(terminator: "\""))
         case "-":
             if self.peekChar() == "-" {
                 self.readChar()
-                tok = TokenType.COMMENT(self.readComment())
-            }else{
-                tok = TokenType.MINUS;
+				return CommentToken(value:self.readComment())
             }
-		case "*":
-			tok = TokenType.ASTERISK
-		case "/":
-			tok = TokenType.SLASH
-        case "+":
-            tok = TokenType.PLUS;
+			return Token(tokenType:TokenType.MINUS);
         case "<":
             if self.peekChar() == "=" {
                 self.readChar()
-                tok = TokenType.LTE;
-            }else{
-                tok = TokenType.LT;
+				return Token(tokenType:TokenType.LTE);
             }
+			return Token(tokenType:TokenType.LT);
         case ">":
             if self.peekChar() == "=" {
                 self.readChar()
-                tok = TokenType.GTE;
-            }else{
-                tok = TokenType.GT;
+				return Token(tokenType:TokenType.GTE);
             }
-        case "+":
-            tok = TokenType.PLUS;
+			return Token(tokenType:TokenType.GT);
         default:
             if self.ch.isAlpha(){
                 let lit = readIdentifier()
-                tok = keywords[lit] ?? TokenType.IDENT(lit)
+				if let val = keywords[lit] {
+					return Token(tokenType: val)
+				}
+				return IdentifierToken(identifier: lit)
             } else if self.ch.isDigit(){
                 let lit = readNumber()
-                tok = TokenType.INT(lit)
+				return IntegerToken(value:lit)
             }else{
-                tok = TokenType.EOF;
+				return Token(tokenType: TokenType.EOF)
             }
         }
-        self.readChar()
-        return tok
     }
     
     func readString(terminator : Character) -> String {
@@ -640,21 +680,17 @@ var input2 = "if num > 40 then\n" +
 "end" 
 */
 
-var input =  "x = 22 + (34 * 10);\n" + 
-"if x > 5 then\n" +
-"y=5\n" +
+var input =  "x = 22 + (34 * 10);" + 
+"if z > 5 then\n" +
+"y = 6\n" +
 "end"
 
 let lex2 = Lexer(input: input)
-var tok : TokenType
+var tok : Token
 repeat {
     tok = lex2.nextToken()
-    print("x:", tok)
-} while !tok.isEOF()
-
-
-
-
+    print("x:", tok.toString())
+} while tok.tokenType != TokenType.EOF
 
 
 let lexer = Lexer(input: input)
