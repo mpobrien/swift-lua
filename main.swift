@@ -21,9 +21,12 @@ public struct IntegerLiteral : Expression {
 	var value: Int
 }
 
-
 public struct StringLiteral : Expression {
 	var value: String
+}
+
+public struct BooleanLiteral: Expression {
+	var value: Bool
 }
 
 public class Stuff : Expression {
@@ -37,14 +40,14 @@ public struct ParseError: Error {
 	let message: String
 }
 
-enum Precedence : Int {
+enum Precedence : Int, Equatable {
 	case LOWEST = 0
-	case EQUALS = 1
-	case LESSGREATER = 2
-	case SUM  = 3
-	case PRODUCT = 4
-	case PREFIX  = 5
-	case CALL = 6
+	case EQUALS
+	case LESSGREATER
+	case SUM  
+	case PRODUCT 
+	case PREFIX  
+	case CALL 
 	func toString() -> String{
 		switch self {
 			case .LOWEST: return "LOWEST"
@@ -60,6 +63,8 @@ enum Precedence : Int {
 
 
 public enum Token {
+	case AND
+	case OR
     case EOF
     case EQ
     case LPAREN
@@ -102,6 +107,8 @@ public enum Token {
     case RETURN
     case LOCAL
     case STRING(String)
+	case TRUE
+	case FALSE
 
 	func opPrecedence() -> Precedence {
 		switch self {
@@ -120,6 +127,8 @@ public enum Token {
 
 	func toString() -> String {
 		switch self {
+		case .AND: return "AND"
+		case .OR: return "OR"
 		case .EOF: return "EOF"
 		case .EQ: return "EQ"
 		case .LPAREN: return "LPAREN"
@@ -161,6 +170,8 @@ public enum Token {
 		case .END: return "END"
 		case .RETURN: return "RETURN"
 		case .LOCAL: return "LOCAL"
+		case .TRUE: return "TRUE"
+		case .FALSE: return "FALSE"
 		case let .STRING(x):
 			return "STRING[" + x + "]"
 		}
@@ -209,8 +220,12 @@ let EscapeSequences : Dictionary<Character, Character> = [
 ]
 
 var keywords : Dictionary<String, Token> = [
+	"true": Token.TRUE,
+	"false": Token.FALSE,
     "let": Token.LET,
     "nil": Token.NIL,
+	"and": Token.AND,
+	"or" : Token.OR,
     "while": Token.WHILE,
     "do": Token.DO,
     "if": Token.IF,
@@ -228,7 +243,17 @@ var keywords : Dictionary<String, Token> = [
 ]
 
 
-typealias Program = Array<Statement>
+typealias BlockStatements = Array<Statement>
+
+public class IfStatement {
+	var clause : Expression
+	var consequence: BlockStatements
+	var alternative : IfStatement? = nil
+	init(clause : Expression, consequence: BlockStatements){
+		self.clause = clause
+		self.consequence = consequence
+	}
+}
 
 public struct AssignStatement : Statement{
 	var ident : String
@@ -250,34 +275,6 @@ public class Parser {
 		self.nextToken()
 	}
 
-/*
-var precedences = map[token.TokenType]int{ token.EQ: EQUALS,
-token.NOT_EQ: EQUALS,
-    token.LT:
-    token.GT:
-    token.PLUS:
-    token.MINUS:    SUM,
-    token.SLASH:    PRODUCT,
-    token.ASTERISK: PRODUCT,
-}
-// [...]
-func (p *Parser) peekPrecedence() int {
-if p, ok := precedences[p.peekToken.Type]; ok {
-return p }
-return LOWEST }
-*/
-
-
-
-	/*
-	func expectPeek(tokenType: Token) {
-		if  case self.peekToken == tokenType {
-		}
-		if p.peekTokenIs(t) {
-		    p.nextToken()
-				   return true } else {
-					   return false }
-			*/
 	func nextToken() {
 		self.curToken = self.peekToken
 		self.peekToken = self.lexer.nextToken()
@@ -285,6 +282,29 @@ return LOWEST }
 
 	func parsePrefix() throws -> Expression {
 		switch self.curToken {
+			case Token.TRUE:
+				return BooleanLiteral(value: true)
+			case Token.FALSE:
+				return BooleanLiteral(value: false)
+			case Token.MINUS:
+				self.nextToken()
+				return PrefixExpression(
+					Operator: "-",
+					rhs: try self.parseExpression(prec: Precedence.PREFIX)
+				)
+			case Token.BANG:
+				self.nextToken()
+				return PrefixExpression(
+					Operator: "!",
+					rhs: try self.parseExpression(prec: Precedence.PREFIX)
+				)
+			case Token.LPAREN:
+				self.nextToken()
+				let exp = try self.parseExpression(prec: Precedence.LOWEST)
+				if case Token.RPAREN(_) = self.peekToken{ 
+					throw ParseError(message:"Expected ')'")
+				}
+				return exp
 			case let Token.IDENT(ident):
 				return Identifier(name: ident)
 			case let Token.INT(integer):
@@ -305,11 +325,11 @@ return LOWEST }
 			case Token.PLUS:
 				opcode = "+"
 			case Token.MINUS:
-				opcode = "+"
+				opcode = "-"
 			case Token.ASTERISK:
-				opcode = "+"
+				opcode = "*"
 			case Token.SLASH:
-				opcode = "+"
+				opcode = "/"
 			case Token.EQ:
 				opcode = "=="
 			case Token.NOTEQ:
@@ -325,6 +345,7 @@ return LOWEST }
 		let prec = self.curToken.opPrecedence()
 		self.nextToken()
 		let rhs = try self.parseExpression(prec:prec)
+		self.nextToken()
 		return InfixExpression(lhs: left, Operator: opcode, rhs: rhs)
 	}
 
@@ -347,28 +368,12 @@ return LOWEST }
 				left = infixLeft!
 			}
 		}
-
 		return left;
-		
+	}
 
-/*
-		let left = try self.curToken.parsePrefix()
-		for !p.peekTokenIs(token.SEMICOLON) && precedence < p.peekPrecedence() {
-			 infix := p.infixParseFns[p.peekToken.Type]
-if infix == nil {
-return leftExp }
-           p.nextToken()
-           leftExp = infix(leftExp)
-       }
-*/
-
-
-
-		switch self.curToken {
-			case let Token.IDENT(ident):
-				return Identifier(name: ident)
-			default:
-				throw ParseError(message:"no parse expression for " + self.curToken.toString());
+	func consumeSemicolon(){
+		if case Token.SEMICOLON = self.peekToken  {
+			self.nextToken()
 		}
 	}
 
@@ -376,15 +381,60 @@ return leftExp }
 		self.nextToken() // consume the lhs
 		self.nextToken() // consume the '=' token.
 
-		return AssignStatement(
+		let assignStatement = AssignStatement(
 			ident: lhs, 
 			rhs: try self.parseExpression(prec:Precedence.LOWEST)
 		)
+		print("cur token is", self.curToken.toString())
+		self.consumeSemicolon()
+		return assignStatement
 	}
 
-	func parseExpressionStatement() throws -> ExpressionStatement {
-		return ExpressionStatement(expression: Stuff(tok:Token.ILLEGAL))
-		
+	func parseIfStatement() throws -> ExpressionStatement {
+		self.nextToken() // consume IF
+		let clause = try self.parseExpression(prec:Precedence.LOWEST)
+		guard case Token.THEN = self.curToken else {
+			throw ParseError(message:"expected 'then', got" + self.curToken.toString())
+		}
+		self.nextToken() // consume THEN
+		var consequence = BlockStatements()
+		var alternative : IfStatement? = nil
+		while true {
+			// consume the consequence
+			if case Token.END = self.curToken {} else {
+				consequence.append(try self.parseStatement())
+				self.nextToken()
+			}
+		}
+		switch self.curToken{
+			case Token.ELSE, Token.ELSEIF:
+				break
+			default:
+				return try parseIfStatement()
+		}
+		while true {
+
+			// consume the consequence
+			if case Token.END = self.curToken {} else {
+				consequence.append(try self.parseStatement())
+				self.nextToken()
+			}
+		}
+	}
+
+	func parseBlock() throws -> BlockStatements {
+		var block = BlockStatements()
+		while true { 
+			switch self.curToken {
+			case Token.END:
+				return block
+			case Token.EOF:
+				throw ParseError(message:"expected 'end' for block but reached EOF")
+			default:
+				block.append(try self.parseStatement())
+			}
+		}
+		return block
 	}
 
 	func parseStatement() throws -> Statement {
@@ -393,18 +443,18 @@ return leftExp }
 				if case Token.ASSIGN = self.peekToken {
 					return try self.parseAssignStatement(lhs: ident)
 				}
-
 				throw ParseError(message:":(")
+			case Token.IF:
+				return try self.parseIfStatement()
 		default:
 			throw ParseError(message: "unexpected token: " + self.curToken.toString())
 		}
 	}
 
-	func parseProgram() throws -> Program {
-		var program = Program()
+	func parseProgram() throws -> BlockStatements {
+		var program = BlockStatements()
 		while !self.curToken.isEOF() {
-			let s = try self.parseStatement()
-			program.append(s)
+			program.append(try self.parseStatement())
 			self.nextToken()
 		}
 		return program
@@ -466,6 +516,10 @@ public class Lexer {
             }else{
                 tok = Token.MINUS;
             }
+		case "*":
+			tok = Token.ASTERISK
+		case "/":
+			tok = Token.SLASH
         case "+":
             tok = Token.PLUS;
         case "<":
@@ -593,7 +647,10 @@ var input2 = "if num > 40 then\n" +
 "end" 
 */
 
-var input =  "x = 22 + 34"
+var input =  "x = 22 + (34 * 10);\n" + 
+"if x > 5 then\n" +
+"y=5\n" +
+"end"
 
 let lex2 = Lexer(input: input)
 var tok : Token
