@@ -1,9 +1,8 @@
 
 // TODO boolean infix and prefix operators
 // TODO local
-// TODO for loops
 // TODO list and map literals
-// a, b, c  = 3, 2, 1
+// multiple assignment, i.e.: a, b, c  = 3, 2, 1
 
 extension Character
 {
